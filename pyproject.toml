@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "specli"
+version = "0.8.0"
+description = "Specify 7 GitOps CLI — scope-first pull/push for forms, schema, and app resources"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "GPL-3.0-or-later" }
+authors = [{ name = "UniMus Natur" }]
+dependencies = [
+  "requests>=2.28.0",
+  "urllib3>=1.26.0",
+  "PyYAML>=6.0",
+  "keyring>=24.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/UniMus-Natur/specli"
+Repository = "https://github.com/UniMus-Natur/specli"
+
+[project.scripts]
+specli = "specli.main:main"
+
+[tool.setuptools.packages.find]
+include = ["specli*"]
