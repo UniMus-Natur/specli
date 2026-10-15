@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import getpass
 import sys
-from pathlib import Path
 
 from specli import secrets
 from specli.client import disable_insecure_request_warnings, login
@@ -85,10 +84,12 @@ def cmd_login(args: argparse.Namespace) -> int:
         default=str(meta.get("instance") or "").strip() or None,
     )
     url = url.rstrip("/")
-    user = (args.user or "").strip() or _prompt(
-        "Username",
-        default=str(meta.get("user") or "").strip() or None,
+    user_default = (
+        secrets.get_user(workspace)
+        or str(meta.get("user") or "").strip()
+        or None
     )
+    user = (args.user or "").strip() or _prompt("Username", default=user_default)
     password = (args.password or "").strip() or _prompt_password()
 
     import requests
@@ -132,12 +133,12 @@ def cmd_login(args: argparse.Namespace) -> int:
     write_workspace_connection(
         workspace,
         instance=url,
-        user=user,
         login_collection=login_collection,
+        strip_user=True,
     )
-    secret_path = secrets.set_password(workspace, password)
-    print(f"Connection saved in {workspace / 'workspace.yaml'}")
-    print(f"Password stored in {secret_path} (gitignored)")
+    secret_path = secrets.set_credentials(workspace, user=user, password=password)
+    print(f"Instance saved in {workspace / 'workspace.yaml'}")
+    print(f"Credentials stored in {secret_path} (gitignored)")
     print(f"login-collection: {login_collection} (default API door, not sync scope)")
     print("Next: specli pull")
     return 0
@@ -145,8 +146,8 @@ def cmd_login(args: argparse.Namespace) -> int:
 
 def cmd_logout(_args: argparse.Namespace) -> int:
     workspace = require_workspace()
-    secrets.delete_password(workspace)
-    print(f"Cleared password from {workspace / LOCAL_SECRETS_FILE}")
+    secrets.clear_credentials(workspace)
+    print(f"Cleared credentials from {workspace / LOCAL_SECRETS_FILE}")
     return 0
 
 
@@ -202,7 +203,7 @@ def build_parser(sub: argparse._SubParsersAction) -> None:
     )
     login_p.set_defaults(auth_handler=cmd_login)
 
-    logout_p = cmd.add_parser("logout", help="Remove the local password file entry")
+    logout_p = cmd.add_parser("logout", help="Remove local credentials")
     logout_p.set_defaults(auth_handler=cmd_logout)
 
     whoami = cmd.add_parser("whoami", help="Show the repository connection")

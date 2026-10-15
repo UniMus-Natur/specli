@@ -38,10 +38,17 @@ def cmd_status(_args: argparse.Namespace) -> int:
     print(f"workspace: {root}")
     print(f"apiVersion: {meta['apiVersion']}")
     print(f"instance: {meta.get('instance') or '(unset)'}")
-    print(f"user: {meta.get('user') or '(unset)'}")
     print(f"loginCollection: {meta.get('loginCollection') or '(unset)'}")
+    local_user = secrets.get_user(root)
+    has_password = bool(secrets.get_password(root))
     secret = root / ws.LOCAL_SECRETS_FILE
-    print(f"secrets: {'present' if secrets.get_password(root) else 'missing'} ({secret})")
+    if local_user and has_password:
+        creds = f"user={local_user}"
+    elif local_user or has_password:
+        creds = "incomplete"
+    else:
+        creds = "missing"
+    print(f"credentials: {creds} ({secret})")
     for rel in ws.LAYOUT_DIRS:
         mark = "ok" if (root / rel).is_dir() else "missing"
         print(f"  [{mark}] {rel}")
@@ -58,10 +65,6 @@ def cmd_init(args: argparse.Namespace) -> int:
         "Specify URL",
         default=str(meta.get("instance") or "").strip() or None,
     )
-    user = (args.user or "").strip() or _prompt(
-        "Username",
-        default=str(meta.get("user") or "").strip() or None,
-    )
     login_collection = (args.login_collection or "").strip() or _prompt(
         "Login collection",
         default=str(meta.get("loginCollection") or "").strip() or None,
@@ -71,14 +74,12 @@ def cmd_init(args: argparse.Namespace) -> int:
     created = ws.ensure_layout(
         path,
         instance=url.rstrip("/"),
-        user=user,
         login_collection=login_collection,
     )
     if existing and not created:
         ws.write_workspace_connection(
             path,
             instance=url.rstrip("/"),
-            user=user,
             login_collection=login_collection,
         )
         ws.ensure_secrets_gitignore(path)
@@ -117,7 +118,6 @@ def build_parser(sub: argparse._SubParsersAction) -> None:
     )
     init.add_argument("path", nargs="?", default=".", help="Directory (default: .)")
     init.add_argument("--url", default=None, help="Specify base URL")
-    init.add_argument("--user", default=None, help="Specify username")
     init.add_argument(
         "--login-collection",
         default=None,

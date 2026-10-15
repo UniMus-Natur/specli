@@ -19,7 +19,7 @@ def main(argv: list[str] | None = None) -> int:
             "  specli workspace init .\n"
             "  specli auth login\n"
             "  specli pull\n"
-            "Secrets: .specli.local.yaml (gitignored)\n"
+            "Credentials: .specli.local.yaml (user + password, gitignored)\n"
             "CI: SPECLI_URL / SPECLI_USER / SPECLI_PASSWORD"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,

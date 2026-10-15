@@ -6,8 +6,8 @@ Use it with **any** Specify 7 instance. The tool is separate from your config
 repository: install `specli` once, then keep each instance’s forms, schema, app
 resources, and picklists in its own Git repo.
 
-- Connection settings live in the config repo (`workspace.yaml`)
-- Password stays local and gitignored (`.specli.local.yaml`)
+- Instance URL (and optional login collection) live in the config repo (`workspace.yaml`)
+- Username + password stay local and gitignored (`.specli.local.yaml`)
 - No `~/.specli` / machine-global config
 - Pull is staged and validated; push is all-or-nothing CAS (requires a small
   Specify server endpoint)
@@ -51,8 +51,8 @@ Upgrade later with `pipx upgrade specli` or `pip install -U "specli @ git+…"`.
 mkdir my-specify-config && cd my-specify-config
 git init
 
-specli workspace init .     # prompts for URL, user, login collection
-specli auth login           # stores password in .specli.local.yaml
+specli workspace init .     # prompts for URL / login collection
+specli auth login           # stores user + password in .specli.local.yaml
 specli pull                 # snapshot the instance into this repo
 
 git add .
@@ -71,8 +71,8 @@ specli push                 # needs /api/gitops/deploy/ on the server
 ## What lives in the config repo
 
 ```text
-workspace.yaml                 # committed: instance URL, user, loginCollection
-.specli.local.yaml             # gitignored: password only
+workspace.yaml                 # committed: instance URL, loginCollection, policies
+.specli.local.yaml             # gitignored: user + password
 .gitignore
 inventory.yaml
 
@@ -82,8 +82,8 @@ forms/…  viewsets/…  schema/…  resources/…  records/…  state/
 | Concept | Meaning |
 |---------|---------|
 | **Config repo** | Git repository for one Specify instance’s desired state |
-| **`workspace.yaml`** | Non-secret connection + policies (safe to commit) |
-| **`.specli.local.yaml`** | Password for this checkout only (never commit) |
+| **`workspace.yaml`** | Shared instance binding + policies (safe to commit) |
+| **`.specli.local.yaml`** | Per-clone username + password (never commit) |
 | **vendor** | Exact disk defaults from Specify (read-only) |
 | **managed** | Exact DB-backed resources you own |
 

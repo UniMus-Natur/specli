@@ -331,11 +331,11 @@ def init_repository(
     root: Path,
     *,
     instance: str | None = None,
-    user: str | None = None,
     login_collection: str | None = None,
 ) -> None:
+    """Create an empty v3 workspace. Username belongs in ``.specli.local.yaml``."""
     root.mkdir(parents=True, exist_ok=True)
-    payload = {
+    payload: dict[str, Any] = {
         "apiVersion": API_VERSION,
         "kind": "Workspace",
         "instance": instance,
@@ -346,8 +346,6 @@ def init_repository(
             "personalResources": "excluded",
         },
     }
-    if user:
-        payload["user"] = user
     if login_collection:
         payload["loginCollection"] = login_collection
     _yaml_write(root / WORKSPACE_FILE, payload)

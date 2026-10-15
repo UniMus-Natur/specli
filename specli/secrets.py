@@ -54,10 +54,23 @@ def save_local_secrets(workspace: Path, data: dict[str, Any]) -> Path:
     return path
 
 
+def set_credentials(workspace: Path, *, user: str, password: str) -> Path:
+    data = load_local_secrets(workspace)
+    data["user"] = user
+    data["password"] = password
+    return save_local_secrets(workspace, data)
+
+
 def set_password(workspace: Path, password: str) -> Path:
+    """Update password only (keeps existing user if any)."""
     data = load_local_secrets(workspace)
     data["password"] = password
     return save_local_secrets(workspace, data)
+
+
+def get_user(workspace: Path) -> str | None:
+    user = str(load_local_secrets(workspace).get("user") or "").strip()
+    return user or None
 
 
 def get_password(workspace: Path) -> str | None:
@@ -65,7 +78,14 @@ def get_password(workspace: Path) -> str | None:
     return password or None
 
 
+def clear_credentials(workspace: Path) -> None:
+    path = local_secrets_path(workspace)
+    if path.exists():
+        path.unlink()
+
+
 def delete_password(workspace: Path) -> None:
+    """Remove password; drop the file if nothing else remains."""
     path = local_secrets_path(workspace)
     if not path.exists():
         return

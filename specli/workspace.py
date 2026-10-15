@@ -83,25 +83,25 @@ def load_workspace_meta(workspace: Path) -> dict[str, Any]:
 
 
 def workspace_connection(workspace: Path) -> dict[str, str]:
-    """Return committed connection fields from ``workspace.yaml``."""
+    """Return committed connection fields from ``workspace.yaml``.
+
+    Username is *not* part of the committed workspace — it lives in
+    ``.specli.local.yaml``. A legacy ``user`` key in ``workspace.yaml`` is
+    returned only as a migration fallback.
+    """
     meta = load_workspace_meta(workspace)
     instance = str(meta.get("instance") or "").strip().rstrip("/")
-    user = str(meta.get("user") or "").strip()
     login_collection = str(meta.get("loginCollection") or "").strip()
+    legacy_user = str(meta.get("user") or "").strip()
     if not instance:
         sys.exit(
             f"{workspace / SPECLI_YAML}: missing instance URL.\n"
             "Set it with: specli workspace init --url …"
         )
-    if not user:
-        sys.exit(
-            f"{workspace / SPECLI_YAML}: missing user.\n"
-            "Set it with: specli auth login"
-        )
     return {
         "instance": instance,
-        "user": user,
         "loginCollection": login_collection,
+        "legacyUser": legacy_user,
     }
 
 
@@ -109,16 +109,18 @@ def write_workspace_connection(
     workspace: Path,
     *,
     instance: str,
-    user: str,
     login_collection: str | None,
+    strip_user: bool = True,
 ) -> None:
+    """Write committed connection fields. Never stores username here."""
     meta = load_workspace_meta(workspace)
     meta["instance"] = instance.rstrip("/")
-    meta["user"] = user
     if login_collection:
         meta["loginCollection"] = login_collection
     else:
         meta.pop("loginCollection", None)
+    if strip_user:
+        meta.pop("user", None)
     path = workspace / SPECLI_YAML
     path.write_text(
         yaml.safe_dump(meta, sort_keys=False, allow_unicode=True),
@@ -145,7 +147,6 @@ def ensure_layout(
     workspace: Path,
     *,
     instance: str | None = None,
-    user: str | None = None,
     login_collection: str | None = None,
 ) -> list[Path]:
     created: list[Path] = []
@@ -153,17 +154,15 @@ def ensure_layout(
         init_repository(
             workspace,
             instance=instance,
-            user=user,
             login_collection=login_collection,
         )
         created.extend([workspace / WORKSPACE_FILE, workspace / "inventory.yaml"])
     else:
-        if instance or user or login_collection:
+        if instance or login_collection is not None:
             meta = load_workspace_meta(workspace)
             write_workspace_connection(
                 workspace,
                 instance=instance or str(meta.get("instance") or ""),
-                user=user or str(meta.get("user") or ""),
                 login_collection=login_collection
                 if login_collection is not None
                 else (str(meta.get("loginCollection") or "") or None),

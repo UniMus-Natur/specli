@@ -43,12 +43,11 @@ You will be asked for:
 | Field | Purpose |
 |-------|---------|
 | Specify URL | Base URL of the instance, e.g. `https://specify.example.org` |
-| Username | Specify user (needs rights to read config; admin for push) |
 | Login collection | Only the collection used to open an API session — not the sync scope |
 
 That writes:
 
-- `workspace.yaml` — URL / user / login collection / policies (**commit this**)
+- `workspace.yaml` — URL / login collection / policies (**commit this**; no username)
 - `inventory.yaml` — empty until the first pull
 - `.gitignore` — ignores `.specli.local.yaml`
 
@@ -57,18 +56,18 @@ Non-interactive:
 ```bash
 specli workspace init . \
   --url https://specify.example.org \
-  --user curator \
   --login-collection MyCollection
 ```
 
-## 3. Log in (password stays local)
+## 3. Log in (credentials stay local)
 
 ```bash
 specli auth login
 ```
 
-Password is stored only in `.specli.local.yaml` (mode `0600`, gitignored).
-Re-run login after cloning the repo on another machine.
+Username and password are stored only in `.specli.local.yaml` (mode `0600`,
+gitignored). Each clone / teammate uses their own account. Re-run login after
+cloning the repo on another machine.
 
 ```bash
 specli auth whoami --check
@@ -124,7 +123,7 @@ Deleting a file alone is **not** a delete. To retire a managed resource:
 ## Multiple instances / machines
 
 - One config **Git repository per Specify instance** is the usual model.
-- Each clone stores its own `.specli.local.yaml`; never commit passwords.
+- Each clone stores its own `.specli.local.yaml` (user + password); never commit it.
 - Point automation at a checkout with `SPECLI_WORKSPACE` and env credentials
   (see README).
 
@@ -133,6 +132,6 @@ Deleting a file alone is **not** a delete. To retire a managed resource:
 | Symptom | Fix |
 |---------|-----|
 | `No specli/v3 repository found` | `cd` into the config repo, or set `SPECLI_WORKSPACE` |
-| `No password stored` | `specli auth login` |
+| `No credentials in .specli.local.yaml` | `specli auth login` |
 | Push fails / 404 on deploy | Server needs `POST /api/gitops/deploy/` — pull/status still work without it |
 | Pull refuses local edits | Commit or revert local changes first; pull never discards work |

@@ -78,7 +78,7 @@ def resolve_connection(
 
     Precedence:
     1. SPECLI_URL + SPECLI_USER + SPECLI_PASSWORD (CI)
-    2. ``workspace.yaml`` + ``.specli.local.yaml`` in the config repo
+    2. ``workspace.yaml`` (instance) + ``.specli.local.yaml`` (user, password)
     """
     env_conn = _connection_from_env(
         login_collection_override=login_collection_override,
@@ -88,10 +88,11 @@ def resolve_connection(
 
     workspace = require_workspace()
     conn = workspace_connection(workspace)
+    user = secrets.get_user(workspace) or conn.get("legacyUser") or ""
     password = secrets.get_password(workspace)
-    if not password:
+    if not user or not password:
         sys.exit(
-            f"No password stored in {workspace / '.specli.local.yaml'}.\n"
+            f"No credentials in {workspace / '.specli.local.yaml'}.\n"
             "Run: specli auth login"
         )
 
@@ -100,7 +101,7 @@ def resolve_connection(
     )
     return Connection(
         url=conn["instance"],
-        user=conn["user"],
+        user=user,
         password=password,
         login_collection=login_collection,
         workspace=str(workspace),
