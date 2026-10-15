@@ -27,11 +27,44 @@ def list_collections(session: requests.Session, base: str) -> list[dict[str, Any
 
 
 def discipline_slug(discipline: dict[str, Any]) -> str:
+    """Default slug: prefer type (maps to Specify config/<type>/), else name."""
     dtype = str(discipline.get("type") or "").strip()
     name = str(discipline.get("name") or f"discipline-{discipline.get('id')}")
     if dtype and dtype.lower() != "unknown":
         return safe_slug(dtype)
     return safe_slug(name)
+
+
+def unique_discipline_slug(
+    discipline: dict[str, Any],
+    all_disciplines: list[dict[str, Any]] | None = None,
+) -> str:
+    """Workspace path slug — unique when several disciplines share the same type.
+
+    Prefer type (config-dir alignment). If that collides across *all_disciplines*,
+    fall back to name, then ``name-<id>``.
+    """
+    base = discipline_slug(discipline)
+    if not all_disciplines:
+        return base
+    peers = [
+        d
+        for d in all_disciplines
+        if d.get("id") is not None and discipline_slug(d) == base
+    ]
+    if len(peers) <= 1:
+        return base
+    name_slug = safe_slug(
+        str(discipline.get("name") or f"discipline-{discipline.get('id')}")
+    )
+    name_peers = [
+        d
+        for d in peers
+        if safe_slug(str(d.get("name") or "")) == name_slug
+    ]
+    if len(name_peers) <= 1:
+        return name_slug
+    return f"{name_slug}-{int(discipline['id'])}"
 
 
 def match_discipline(discipline: dict[str, Any], needle: str) -> bool:
@@ -43,7 +76,8 @@ def match_discipline(discipline: dict[str, Any], needle: str) -> bool:
     name = str(discipline.get("name") or "").strip().lower()
     dtype = str(discipline.get("type") or "").strip().lower()
     slug = discipline_slug(discipline).lower()
-    return needle_l in {name, dtype, slug}
+    name_slug = safe_slug(str(discipline.get("name") or "")).lower()
+    return needle_l in {name, dtype, slug, name_slug}
 
 
 def resolve_discipline(
@@ -54,15 +88,33 @@ def resolve_discipline(
     needle = (needle or "").strip()
     if not needle:
         sys.exit("Discipline name/type/id required")
-    matches = [d for d in list_disciplines(session, base) if match_discipline(d, needle)]
+    all_discs = list_disciplines(session, base)
+    matches = [d for d in all_discs if match_discipline(d, needle)]
     if not matches:
         available = ", ".join(
-            f"{discipline_slug(d)}/{d.get('name')}" for d in list_disciplines(session, base)
+            f"{unique_discipline_slug(d, all_discs)}/{d.get('name')}" for d in all_discs
         ) or "(none)"
         sys.exit(f"Discipline {needle!r} not found. Available: {available}")
     if len(matches) > 1:
-        labels = ", ".join(f"{d.get('id')}:{discipline_slug(d)}" for d in matches)
-        sys.exit(f"Discipline {needle!r} is ambiguous ({labels}). Use id or type slug.")
+        # Prefer exact id / exact unique workspace slug / exact name
+        needle_l = needle.lower()
+        exact = [
+            d
+            for d in matches
+            if str(d.get("id")) == needle
+            or unique_discipline_slug(d, all_discs).lower() == needle_l
+            or str(d.get("name") or "").strip().lower() == needle_l
+        ]
+        if len(exact) == 1:
+            return exact[0]
+        labels = ", ".join(
+            f"{d.get('id')}:{unique_discipline_slug(d, all_discs)}({d.get('name')})"
+            for d in matches
+        )
+        sys.exit(
+            f"Discipline {needle!r} is ambiguous ({labels}). "
+            "Use discipline id or the unique workspace slug."
+        )
     return matches[0]
 
 

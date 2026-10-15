@@ -1,4 +1,4 @@
-"""Resolve Specify connection settings from context, env overrides, or CLI."""
+"""Resolve Specify connection settings from the local repo or CI env."""
 
 from __future__ import annotations
 
@@ -9,9 +9,9 @@ from typing import Any
 
 import requests
 
-from specli import configstore, secrets
-from specli.configstore import Context
+from specli import secrets
 from specli.domain import open_session
+from specli.workspace import require_workspace, workspace_connection
 
 
 @dataclass(frozen=True)
@@ -22,7 +22,7 @@ class Connection:
     user: str
     password: str
     login_collection: str | None = None
-    context_name: str | None = None
+    workspace: str | None = None
 
     def session(
         self,
@@ -66,20 +66,19 @@ def _connection_from_env(
         user=user,
         password=password,
         login_collection=login_collection,
-        context_name=None,
+        workspace=_env("SPECLI_WORKSPACE"),
     )
 
 
 def resolve_connection(
     *,
-    context_name: str | None = None,
     login_collection_override: str | None = None,
 ) -> Connection:
-    """Resolve connection for the active (or named) context.
+    """Resolve connection for the repository discovered from cwd / env.
 
     Precedence:
     1. SPECLI_URL + SPECLI_USER + SPECLI_PASSWORD (CI)
-    2. Named/current context from ``~/.specli/config.yaml`` + secret store
+    2. ``workspace.yaml`` + ``.specli.local.yaml`` in the config repo
     """
     env_conn = _connection_from_env(
         login_collection_override=login_collection_override,
@@ -87,19 +86,22 @@ def resolve_connection(
     if env_conn is not None:
         return env_conn
 
-    ctx: Context = configstore.get_context(context_name)
-    password = secrets.get_password(ctx.name)
+    workspace = require_workspace()
+    conn = workspace_connection(workspace)
+    password = secrets.get_password(workspace)
     if not password:
         sys.exit(
-            f"No password stored for context {ctx.name!r}.\n"
-            f"Run: specli auth login --context {ctx.name}"
+            f"No password stored in {workspace / '.specli.local.yaml'}.\n"
+            "Run: specli auth login"
         )
 
-    login_collection = (login_collection_override or "").strip() or ctx.login_collection
+    login_collection = (
+        (login_collection_override or "").strip() or conn["loginCollection"] or None
+    )
     return Connection(
-        url=ctx.url,
-        user=ctx.user,
+        url=conn["instance"],
+        user=conn["user"],
         password=password,
         login_collection=login_collection,
-        context_name=ctx.name,
+        workspace=str(workspace),
     )

@@ -1,4 +1,4 @@
-"""Config-repo workspace bound to a specli context (scope-first layout)."""
+"""Discover and manage a self-contained specli/v3 repository."""
 
 from __future__ import annotations
 
@@ -7,32 +7,36 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from specli import configstore
+from specli.repository_v3 import API_VERSION, WORKSPACE_FILE, init_repository
 
 try:
     import yaml
 except ImportError:
     sys.exit("PyYAML is required. Reinstall specli: pip install -e .")
 
-SPECLI_YAML = "specli.yaml"
-API_VERSION = "specli/v1"
+SPECLI_YAML = WORKSPACE_FILE
+LOCAL_SECRETS_FILE = ".specli.local.yaml"
+GITIGNORE_FILE = ".gitignore"
+LAYOUT_DIRS = ("forms", "viewsets", "schema", "resources", "records", "state")
 
-LAYOUT_DIRS = (
-    "backstop/forms",
-    "backstop/app",
-    "base/forms",
-    "base/app",
-    "by/discipline",
-    "by/collection",
-    "by/usertype",
-    "by/user",
+# Single state-lock name for a repo-local instance binding.
+STATE_CONTEXT = "local"
+
+_GITIGNORE_ENTRIES = (
+    ".specli.local.yaml",
+    ".specli.local.yaml~",
 )
 
-DEFAULT_WORKSPACE_META: dict[str, Any] = {
-    "apiVersion": API_VERSION,
-    "layout": "scope-first",
-    "defaultScopes": ["backstop", "common", "discipline", "collection", "usertype"],
-}
+
+def find_workspace(start: Path | None = None) -> Path | None:
+    """Walk upward from *start* (default: cwd) looking for ``workspace.yaml``."""
+    current = (start or Path.cwd()).expanduser().resolve()
+    if current.is_file():
+        current = current.parent
+    for candidate in (current, *current.parents):
+        if (candidate / WORKSPACE_FILE).is_file():
+            return candidate
+    return None
 
 
 def resolve_workspace(explicit: str | None = None) -> Path | None:
@@ -41,68 +45,132 @@ def resolve_workspace(explicit: str | None = None) -> Path | None:
     env = (os.getenv("SPECLI_WORKSPACE") or "").strip()
     if env:
         return Path(env).expanduser().resolve()
-    try:
-        ctx = configstore.get_context()
-    except SystemExit:
-        return None
-    if not ctx.workspace:
-        return None
-    return Path(ctx.workspace).expanduser().resolve()
+    return find_workspace()
 
 
 def require_workspace(explicit: str | None = None) -> Path:
     path = resolve_workspace(explicit)
     if path is None:
         sys.exit(
-            "No workspace configured for this context.\n"
-            "Bind a config repo with:\n"
-            "  specli workspace init ./specify-config\n"
-            "or:\n"
-            "  specli workspace set /path/to/existing-repo"
+            "No specli/v3 repository found.\n"
+            "Run from inside a config repo, or create one with:\n"
+            "  specli workspace init .\n"
+            "Or set SPECLI_WORKSPACE=/path/to/repo"
         )
+    if not path.is_dir():
+        sys.exit(f"Workspace is not a directory: {path}")
+    load_workspace_meta(path)
     return path
-
-
-def ensure_layout(workspace: Path) -> list[Path]:
-    created: list[Path] = []
-    for rel in LAYOUT_DIRS:
-        target = workspace / rel
-        if not target.exists():
-            target.mkdir(parents=True, exist_ok=True)
-            created.append(target)
-    meta_path = workspace / SPECLI_YAML
-    if not meta_path.exists():
-        with meta_path.open("w", encoding="utf-8") as fh:
-            yaml.safe_dump(DEFAULT_WORKSPACE_META, fh, sort_keys=False)
-        created.append(meta_path)
-    return created
 
 
 def load_workspace_meta(workspace: Path) -> dict[str, Any]:
     path = workspace / SPECLI_YAML
     if not path.exists():
-        return dict(DEFAULT_WORKSPACE_META)
+        sys.exit(f"{workspace}: not a specli/v3 repository (missing {SPECLI_YAML})")
     with path.open(encoding="utf-8") as fh:
         data = yaml.safe_load(fh) or {}
     if not isinstance(data, dict):
         sys.exit(f"Invalid {SPECLI_YAML}: expected mapping")
+    api = data.get("apiVersion")
+    if api != API_VERSION:
+        sys.exit(
+            f"{path}: apiVersion {api!r} is not supported "
+            f"(required {API_VERSION!r}); legacy layouts are not supported"
+        )
+    if data.get("kind") != "Workspace":
+        sys.exit(f"{path}: kind must be 'Workspace'")
     return data
 
 
-def set_workspace_on_current_context(workspace: Path) -> str:
-    config = configstore.load_config()
-    name = config.current_context
-    if not name or name not in config.contexts:
-        sys.exit("No current context. Run: specli auth login")
-    ctx = config.contexts[name]
-    ctx.workspace = str(workspace.resolve())
-    configstore.save_config(config)
-    return name
+def workspace_connection(workspace: Path) -> dict[str, str]:
+    """Return committed connection fields from ``workspace.yaml``."""
+    meta = load_workspace_meta(workspace)
+    instance = str(meta.get("instance") or "").strip().rstrip("/")
+    user = str(meta.get("user") or "").strip()
+    login_collection = str(meta.get("loginCollection") or "").strip()
+    if not instance:
+        sys.exit(
+            f"{workspace / SPECLI_YAML}: missing instance URL.\n"
+            "Set it with: specli workspace init --url …"
+        )
+    if not user:
+        sys.exit(
+            f"{workspace / SPECLI_YAML}: missing user.\n"
+            "Set it with: specli auth login"
+        )
+    return {
+        "instance": instance,
+        "user": user,
+        "loginCollection": login_collection,
+    }
 
 
-def enter_workspace(explicit: str | None = None) -> Path:
-    workspace = require_workspace(explicit)
-    if not workspace.is_dir():
-        sys.exit(f"Workspace is not a directory: {workspace}")
-    os.chdir(workspace)
-    return workspace
+def write_workspace_connection(
+    workspace: Path,
+    *,
+    instance: str,
+    user: str,
+    login_collection: str | None,
+) -> None:
+    meta = load_workspace_meta(workspace)
+    meta["instance"] = instance.rstrip("/")
+    meta["user"] = user
+    if login_collection:
+        meta["loginCollection"] = login_collection
+    else:
+        meta.pop("loginCollection", None)
+    path = workspace / SPECLI_YAML
+    path.write_text(
+        yaml.safe_dump(meta, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+
+
+def ensure_secrets_gitignore(workspace: Path) -> Path:
+    path = workspace / GITIGNORE_FILE
+    existing = path.read_text(encoding="utf-8") if path.exists() else ""
+    lines = existing.splitlines()
+    changed = False
+    for entry in _GITIGNORE_ENTRIES:
+        if entry not in lines:
+            lines.append(entry)
+            changed = True
+    if not path.exists() or changed:
+        text = "\n".join(lines).rstrip() + "\n"
+        path.write_text(text, encoding="utf-8")
+    return path
+
+
+def ensure_layout(
+    workspace: Path,
+    *,
+    instance: str | None = None,
+    user: str | None = None,
+    login_collection: str | None = None,
+) -> list[Path]:
+    created: list[Path] = []
+    if not (workspace / WORKSPACE_FILE).exists():
+        init_repository(
+            workspace,
+            instance=instance,
+            user=user,
+            login_collection=login_collection,
+        )
+        created.extend([workspace / WORKSPACE_FILE, workspace / "inventory.yaml"])
+    else:
+        if instance or user or login_collection:
+            meta = load_workspace_meta(workspace)
+            write_workspace_connection(
+                workspace,
+                instance=instance or str(meta.get("instance") or ""),
+                user=user or str(meta.get("user") or ""),
+                login_collection=login_collection
+                if login_collection is not None
+                else (str(meta.get("loginCollection") or "") or None),
+            )
+    ignore = ensure_secrets_gitignore(workspace)
+    if ignore not in created and ignore.exists():
+        # Only report when we just created an empty repo; still ensure file exists.
+        if created:
+            created.append(ignore)
+    return created

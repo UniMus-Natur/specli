@@ -1,4 +1,4 @@
-"""``specli workspace`` — bind a scope-first config directory to the current context."""
+"""``specli workspace`` — create or inspect a self-contained config repository."""
 
 from __future__ import annotations
 
@@ -6,62 +6,84 @@ import argparse
 import sys
 from pathlib import Path
 
-from specli import configstore, workspace as ws
+from specli import secrets, workspace as ws
+
+
+def _prompt(label: str, *, default: str | None = None, required: bool = True) -> str:
+    suffix = f" [{default}]" if default else ""
+    while True:
+        try:
+            value = input(f"{label}{suffix}: ").strip()
+        except EOFError:
+            sys.exit("\nAborted.")
+        if not value and default is not None:
+            return default
+        if value or not required:
+            return value
+        print("Value required.", file=sys.stderr)
 
 
 def cmd_get(_args: argparse.Namespace) -> int:
     path = ws.resolve_workspace()
     if path is None:
-        print("No workspace set for the current context.", file=sys.stderr)
+        print("No specli/v3 repository found from cwd / SPECLI_WORKSPACE.", file=sys.stderr)
         return 1
     print(path)
     return 0
 
 
 def cmd_status(_args: argparse.Namespace) -> int:
-    config = configstore.load_config()
-    name = config.current_context
-    if not name:
-        print("No current context.", file=sys.stderr)
-        return 1
-    ctx = config.contexts.get(name)
-    if ctx is None:
-        print(f"Unknown context {name!r}", file=sys.stderr)
-        return 1
-    print(f"context: {name}")
-    print(f"workspace: {ctx.workspace or '(not set)'}")
-    if ctx.workspace:
-        root = Path(ctx.workspace).expanduser()
-        print(f"exists: {root.is_dir()}")
-        if root.is_dir():
-            meta = root / ws.SPECLI_YAML
-            print(f"  [{'ok' if meta.exists() else 'missing'}] {ws.SPECLI_YAML}")
-            for rel in ws.LAYOUT_DIRS:
-                mark = "ok" if (root / rel).is_dir() else "missing"
-                print(f"  [{mark}] {rel}")
-            layout = ws.load_workspace_meta(root).get("layout", "?")
-            print(f"layout: {layout}")
-    return 0
-
-
-def cmd_set(args: argparse.Namespace) -> int:
-    path = Path(args.path).expanduser().resolve()
-    if not path.exists():
-        sys.exit(f"Path does not exist: {path}")
-    if not path.is_dir():
-        sys.exit(f"Not a directory: {path}")
-    name = ws.set_workspace_on_current_context(path)
-    print(f"Context {name!r} workspace → {path}")
+    root = ws.require_workspace()
+    meta = ws.load_workspace_meta(root)
+    print(f"workspace: {root}")
+    print(f"apiVersion: {meta['apiVersion']}")
+    print(f"instance: {meta.get('instance') or '(unset)'}")
+    print(f"user: {meta.get('user') or '(unset)'}")
+    print(f"loginCollection: {meta.get('loginCollection') or '(unset)'}")
+    secret = root / ws.LOCAL_SECRETS_FILE
+    print(f"secrets: {'present' if secrets.get_password(root) else 'missing'} ({secret})")
+    for rel in ws.LAYOUT_DIRS:
+        mark = "ok" if (root / rel).is_dir() else "missing"
+        print(f"  [{mark}] {rel}")
     return 0
 
 
 def cmd_init(args: argparse.Namespace) -> int:
     path = Path(args.path).expanduser().resolve()
     path.mkdir(parents=True, exist_ok=True)
-    created = ws.ensure_layout(path)
-    name = ws.set_workspace_on_current_context(path)
 
-    print(f"Context {name!r} workspace → {path}")
+    existing = (path / ws.SPECLI_YAML).is_file()
+    meta = ws.load_workspace_meta(path) if existing else {}
+    url = (args.url or "").strip() or _prompt(
+        "Specify URL",
+        default=str(meta.get("instance") or "").strip() or None,
+    )
+    user = (args.user or "").strip() or _prompt(
+        "Username",
+        default=str(meta.get("user") or "").strip() or None,
+    )
+    login_collection = (args.login_collection or "").strip() or _prompt(
+        "Login collection",
+        default=str(meta.get("loginCollection") or "").strip() or None,
+        required=False,
+    ) or None
+
+    created = ws.ensure_layout(
+        path,
+        instance=url.rstrip("/"),
+        user=user,
+        login_collection=login_collection,
+    )
+    if existing and not created:
+        ws.write_workspace_connection(
+            path,
+            instance=url.rstrip("/"),
+            user=user,
+            login_collection=login_collection,
+        )
+        ws.ensure_secrets_gitignore(path)
+
+    print(f"Repository → {path}")
     if created:
         print("Created:")
         for item in created:
@@ -70,32 +92,35 @@ def cmd_init(args: argparse.Namespace) -> int:
             except ValueError:
                 print(f"  {item}")
     else:
-        print("Layout already present.")
+        print("Updated workspace.yaml / .gitignore")
     print()
-    print("Next: specli pull --clean")
+    print("Next: cd into the repo and run: specli auth login")
     return 0
 
 
 def build_parser(sub: argparse._SubParsersAction) -> None:
     workspace = sub.add_parser(
         "workspace",
-        help="Bind a scope-first config directory to the current context",
+        help="Create or inspect a self-contained specli/v3 config repository",
     )
     cmd = workspace.add_subparsers(dest="workspace_cmd", required=True)
 
-    get_p = cmd.add_parser("get", help="Print the workspace path")
+    get_p = cmd.add_parser("get", help="Print the discovered repository path")
     get_p.set_defaults(workspace_handler=cmd_get)
 
-    status = cmd.add_parser("status", help="Show workspace binding and layout")
+    status = cmd.add_parser("status", help="Show repository connection and layout")
     status.set_defaults(workspace_handler=cmd_status)
-
-    set_p = cmd.add_parser("set", help="Bind an existing directory as the workspace")
-    set_p.add_argument("path", help="Path to the config directory")
-    set_p.set_defaults(workspace_handler=cmd_set)
 
     init = cmd.add_parser(
         "init",
-        help="Create scope-first layout dirs and bind as workspace",
+        help="Create or update a specli/v3 repository in a directory",
     )
     init.add_argument("path", nargs="?", default=".", help="Directory (default: .)")
+    init.add_argument("--url", default=None, help="Specify base URL")
+    init.add_argument("--user", default=None, help="Specify username")
+    init.add_argument(
+        "--login-collection",
+        default=None,
+        help="Default login collection (API door)",
+    )
     init.set_defaults(workspace_handler=cmd_init)

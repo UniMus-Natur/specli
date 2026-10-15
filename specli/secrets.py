@@ -1,64 +1,82 @@
-"""Secret storage for specli context passwords.
-
-Prefer the OS keyring (Windows Credential Locker, macOS Keychain, Linux
-Secret Service). Fall back to ``~/.specli/credentials.yaml`` (mode 0600)
-when keyring is unavailable or fails.
-"""
+"""Repo-local secret storage (``.specli.local.yaml``, gitignored)."""
 
 from __future__ import annotations
 
+import os
+import stat
 import sys
+from pathlib import Path
+from typing import Any
 
-from specli import configstore
+try:
+    import yaml
+except ImportError:
+    sys.exit("PyYAML is required. Reinstall specli: pip install -e .")
 
-KEYRING_SERVICE = "specli"
-
-
-def _keyring_username(context_name: str) -> str:
-    return f"context:{context_name}"
-
-
-def set_password(context_name: str, password: str, *, prefer_keyring: bool = True) -> str:
-    """Store password; return ``\"keyring\"`` or ``\"file\"`` indicating backend used."""
-    if prefer_keyring:
-        try:
-            import keyring
-
-            keyring.set_password(KEYRING_SERVICE, _keyring_username(context_name), password)
-            # Remove file copy if present so keyring is the only source.
-            configstore.delete_context_password_file(context_name)
-            return "keyring"
-        except Exception as exc:
-            print(f"[specli] keyring unavailable ({exc}); storing in credentials file", file=sys.stderr)
-
-    configstore.set_context_password_file(context_name, password)
-    return "file"
+from specli.workspace import LOCAL_SECRETS_FILE, ensure_secrets_gitignore
 
 
-def get_password(context_name: str) -> str | None:
+def local_secrets_path(workspace: Path) -> Path:
+    return workspace / LOCAL_SECRETS_FILE
+
+
+def _restrict_permissions(path: Path) -> None:
     try:
-        import keyring
-
-        value = keyring.get_password(KEYRING_SERVICE, _keyring_username(context_name))
-        if value:
-            return value
-    except Exception:
+        os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
+    except OSError:
         pass
 
-    creds = configstore.load_credentials()
-    entry = creds.get(context_name) or {}
-    password = (entry.get("password") or "").strip()
+
+def load_local_secrets(workspace: Path) -> dict[str, Any]:
+    path = local_secrets_path(workspace)
+    if not path.exists():
+        return {}
+    with path.open(encoding="utf-8") as fh:
+        data = yaml.safe_load(fh) or {}
+    if not isinstance(data, dict):
+        sys.exit(f"{path}: expected a mapping")
+    return data
+
+
+def save_local_secrets(workspace: Path, data: dict[str, Any]) -> Path:
+    ensure_secrets_gitignore(workspace)
+    path = local_secrets_path(workspace)
+    payload = {
+        "apiVersion": "specli/v3",
+        "kind": "LocalSecrets",
+        **data,
+    }
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with tmp.open("w", encoding="utf-8") as fh:
+        yaml.safe_dump(payload, fh, sort_keys=False, allow_unicode=True)
+    tmp.replace(path)
+    _restrict_permissions(path)
+    return path
+
+
+def set_password(workspace: Path, password: str) -> Path:
+    data = load_local_secrets(workspace)
+    data["password"] = password
+    return save_local_secrets(workspace, data)
+
+
+def get_password(workspace: Path) -> str | None:
+    password = str(load_local_secrets(workspace).get("password") or "").strip()
     return password or None
 
 
-def delete_password(context_name: str) -> None:
-    try:
-        import keyring
-
-        try:
-            keyring.delete_password(KEYRING_SERVICE, _keyring_username(context_name))
-        except keyring.errors.PasswordDeleteError:
-            pass
-    except Exception:
-        pass
-    configstore.delete_context_password_file(context_name)
+def delete_password(workspace: Path) -> None:
+    path = local_secrets_path(workspace)
+    if not path.exists():
+        return
+    data = load_local_secrets(workspace)
+    data.pop("password", None)
+    remaining = {
+        key: value
+        for key, value in data.items()
+        if key not in {"apiVersion", "kind"} and value not in (None, "")
+    }
+    if not remaining:
+        path.unlink()
+        return
+    save_local_secrets(workspace, remaining)

@@ -27,6 +27,7 @@ from specli.domain import (
     discipline_slug,
     list_collections,
     list_disciplines,
+    unique_discipline_slug,
 )
 
 Level = Literal["backstop", "common", "discipline", "collection", "usertype", "personal"]
@@ -186,7 +187,8 @@ def classify_dir_row(
     disc = discipline_by_id.get(disc_id) if disc_id is not None else None
     col = collection_by_id.get(col_id) if col_id is not None else None
     user = user_by_id.get(user_id) if user_id is not None else None
-    d_slug = discipline_slug(disc) if disc else None
+    all_discs = list(discipline_by_id.values())
+    d_slug = unique_discipline_slug(disc, all_discs) if disc else None
     c_slug = safe_slug(collection_display_name(col)) if col else None
     username = safe_slug(str(user.get("name") or f"user-{user_id}")) if user else None
 
@@ -243,7 +245,7 @@ def classify_dir_row(
     return Scope(level="common", dir_id=dir_id)
 
 
-def _scope_dedupe_key(scope: Scope) -> tuple:
+def scope_key(scope: Scope) -> tuple:
     """Identity for workspace path (one scope path may map to multiple DB dirs)."""
     if scope.level == "backstop":
         return ("backstop",)
@@ -258,6 +260,10 @@ def _scope_dedupe_key(scope: Scope) -> tuple:
     if scope.level == "personal":
         return ("personal", scope.username)
     return (scope.level,)
+
+
+def _scope_dedupe_key(scope: Scope) -> tuple:
+    return scope_key(scope)
 
 
 def discover_scopes(
@@ -299,7 +305,7 @@ def discover_scopes(
         for disc in disciplines:
             if discipline_filter and not _disc_matches(disc, discipline_filter):
                 continue
-            slug = discipline_slug(disc)
+            slug = unique_discipline_slug(disc, disciplines)
             by_key[("discipline", slug)] = Scope(
                 level="discipline",
                 discipline_slug=slug,
@@ -434,11 +440,6 @@ def scopes_from_workspace(
     if not include_personal:
         found = [s for s in found if s.level != "personal"]
     return found
-
-
-def viewset_filename(name: str) -> str:
-    slug = safe_slug(name)
-    return f"{slug}.views.xml"
 
 
 def app_resource_filename(name: str) -> str:

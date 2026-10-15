@@ -1,114 +1,138 @@
-# Getting started with specli
+# Getting started
 
-Bootstrap a config directory that mirrors a live Specify 7 instance using
-Specify’s own hierarchy (scope-first). Version control is optional and entirely
-up to you — specli only reads/writes files in the bound directory.
+This guide is for **any** Specify 7 instance. `specli` is the CLI; your
+**config repository** is a normal Git repo you create (or already have) for
+that instance’s forms and related configuration.
 
-## Install
+## 1. Install the CLI
+
+Pick one:
 
 ```bash
+# pipx — best for a global `specli` command on a laptop
+pipx install "specli @ git+https://github.com/UniMus-Natur/specli.git"
+
+# pip — user install
+python3 -m pip install --user "specli @ git+https://github.com/UniMus-Natur/specli.git"
+
+# venv
+python3 -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install "specli @ git+https://github.com/UniMus-Natur/specli.git"
-# or from a clone: pip install -e .
+```
+
+Check:
+
+```bash
 specli --version
 ```
 
-## 1. Log in
+Needs Python 3.9+.
+
+## 2. Create a config repository
+
+```bash
+mkdir my-specify-config
+cd my-specify-config
+git init
+
+specli workspace init .
+```
+
+You will be asked for:
+
+| Field | Purpose |
+|-------|---------|
+| Specify URL | Base URL of the instance, e.g. `https://specify.example.org` |
+| Username | Specify user (needs rights to read config; admin for push) |
+| Login collection | Only the collection used to open an API session — not the sync scope |
+
+That writes:
+
+- `workspace.yaml` — URL / user / login collection / policies (**commit this**)
+- `inventory.yaml` — empty until the first pull
+- `.gitignore` — ignores `.specli.local.yaml`
+
+Non-interactive:
+
+```bash
+specli workspace init . \
+  --url https://specify.example.org \
+  --user curator \
+  --login-collection MyCollection
+```
+
+## 3. Log in (password stays local)
 
 ```bash
 specli auth login
 ```
 
-A **context** is one Specify instance. **login-collection** is only an API door.
-
-## 2. Bind a workspace directory
-
-```bash
-specli workspace init ./specify-config
-```
-
-Creates a scope-first layout and `specli.yaml`, and points the current context
-at that directory:
-
-```text
-specify-config/
-  specli.yaml
-  backstop/                     # stock Specify disk baseline
-    forms/
-    app/
-  base/                         # Common
-    forms/
-    app/
-  by/
-    discipline/<slug>/
-      forms/
-      schema/
-      app/
-    collection/<slug>/
-    usertype/<discipline>/<usertype>/
-    user/<username>/            # Personal — only with --include-personal
-```
-
-Or bind an existing directory:
+Password is stored only in `.specli.local.yaml` (mode `0600`, gitignored).
+Re-run login after cloning the repo on another machine.
 
 ```bash
-specli workspace set ./specify-config
+specli auth whoami --check
 ```
 
-## 3. Pull (parity)
+## 4. First pull
 
 ```bash
-specli pull --clean
+specli pull
 ```
 
-Pulls **whole documents** for default scopes: Backstop, Common, Discipline,
-Collection, UserType.
-
-Disk layers (Backstop, stock Common, discipline FS viewsets) come from the
-instance itself:
-
-* `GET /context/viewsets.json` — list of `*.views.xml` under the server config tree
-* `GET /static/config/<path>` — raw XML (same URLs the Form Editor uses)
-
-DB layers overlay on top of that.
-
-| Path | Contents |
-|------|----------|
-| `backstop/forms/…` | Stock system/search/global viewsets (+ formatters) |
-| `base/forms/…` | Common disk + any Common DB viewsets |
-| `by/discipline/<slug>/forms/…` | Discipline disk + DB viewsets |
-| `by/discipline/<slug>/schema/` | Schema JSON |
-| `by/*/app/…` | App resources |
-
-**Personal** (`by/user/…`) needs `--include-personal`.
-
-Backstop is **not** pushed (server disk stock). Promote edits into `base/` or
-`by/…`, then `specli push`.
-
-## 4. Day-to-day
+This builds a full snapshot (forms, app resources, schema, picklists), validates
+it, then publishes it into the current directory. Then:
 
 ```bash
-specli form status
-specli form push
-
-specli schema push --discipline botany
-specli app push --scope discipline/botany
-
-specli status          # dry-run whole workspace
-specli push            # apply whole workspace
+git add .
+git status    # confirm .specli.local.yaml is NOT listed
+git commit -m "Initial Specify configuration snapshot"
 ```
 
-Narrow with `--scope` / `--discipline`:
+## 5. Everyday use
+
+Always run from inside the config repo (or set `SPECLI_WORKSPACE`):
 
 ```bash
-specli pull --scope discipline/botany
-specli form pull --scope collection/my-coll
+cd my-specify-config
+
+specli pull                 # refresh from the instance
+# edit forms / schema / resources / picklists …
+
+specli gitops validate
+specli status               # three-way: baseline / local / remote
+specli push --dry-run
+specli push                 # requires /api/gitops/deploy/ on the server
 ```
 
-## Mental model
+### Status exit codes
 
-Specify resolves config **Personal → UserType → Collection → Discipline → Common → Backstop**.
+| Code | Meaning |
+|------|---------|
+| `0` | Local, baseline, and remote agree |
+| `2` | Deployable local changes |
+| `3` | Conflict or remote drift — do not push |
 
-specli stores the same layers under `backstop/`, `base/`, and `by/…`. Each file
-is a **whole** viewset or app-resource document. Disk stock (including Backstop)
-is pulled from the live instance over HTTP; push targets DB scopes only
-(`base/` / `by/*`).
+### Explicit deletion
+
+Deleting a file alone is **not** a delete. To retire a managed resource:
+
+1. Set its `inventory.yaml` entry to `status: absent` with a reason.
+2. Remove its owned files.
+3. `specli status` then `specli push`.
+
+## Multiple instances / machines
+
+- One config **Git repository per Specify instance** is the usual model.
+- Each clone stores its own `.specli.local.yaml`; never commit passwords.
+- Point automation at a checkout with `SPECLI_WORKSPACE` and env credentials
+  (see README).
+
+## Troubleshooting
+
+| Symptom | Fix |
+|---------|-----|
+| `No specli/v3 repository found` | `cd` into the config repo, or set `SPECLI_WORKSPACE` |
+| `No password stored` | `specli auth login` |
+| Push fails / 404 on deploy | Server needs `POST /api/gitops/deploy/` — pull/status still work without it |
+| Pull refuses local edits | Commit or revert local changes first; pull never discards work |

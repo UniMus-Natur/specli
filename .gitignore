@@ -12,3 +12,5 @@ build/
 .ruff_cache/
 *.egg
 .DS_Store
+.specli.local.yaml
+**/.specli.local.yaml

@@ -1,92 +1,133 @@
 # specli
 
-Specify 7 GitOps CLI: **scope-first** pull/push of forms (whole viewsets),
-schema config, and app resources (UIFormatters, DataObjFormatters, WebLinks).
+GitOps CLI for [Specify 7](https://github.com/specify/specify7) configuration.
 
-The workspace layout mirrors Specify’s hierarchy:
+Use it with **any** Specify 7 instance. The tool is separate from your config
+repository: install `specli` once, then keep each instance’s forms, schema, app
+resources, and picklists in its own Git repo.
 
-`Personal → UserType → Collection → Discipline → Common → Backstop`
+- Connection settings live in the config repo (`workspace.yaml`)
+- Password stays local and gitignored (`.specli.local.yaml`)
+- No `~/.specli` / machine-global config
+- Pull is staged and validated; push is all-or-nothing CAS (requires a small
+  Specify server endpoint)
 
-**Backstop** (and other disk defaults) are pulled from the live instance via
-`/context/viewsets.json` + `/static/config/…` — no Specify source tree required.
-Backstop is kept in the workspace as the edit baseline; it is **not** pushed
-(promote edits into `base/` / `by/*` instead).
-
-specli binds a **directory** to a context; whether that directory is a git repo
-is up to you.
-
-**New here?** See [GETTING_STARTED.md](GETTING_STARTED.md).
+Full contract: [docs/GITOPS_V3.md](docs/GITOPS_V3.md)  
+Walkthrough: [GETTING_STARTED.md](GETTING_STARTED.md)
 
 ## Install
 
+Requires **Python 3.9+**.
+
+**Recommended — isolated CLI with [pipx](https://pipx.pypa.io/):**
+
 ```bash
-pip install "specli @ git+https://github.com/UniMus-Natur/specli.git"
-# or: pip install -e .
+pipx install "specli @ git+https://github.com/UniMus-Natur/specli.git"
 specli --version
 ```
 
-Requires Python 3.9+.
-
-## Quick start
+**pip (user or venv):**
 
 ```bash
-specli auth login
-specli workspace init ./specify-config
-specli pull --clean
-specli status
-specli push
+python3 -m pip install --user "specli @ git+https://github.com/UniMus-Natur/specli.git"
+# or
+python3 -m venv .venv && source .venv/bin/activate
+pip install "specli @ git+https://github.com/UniMus-Natur/specli.git"
 ```
 
-## Workspace layout
+**From a clone (development):**
+
+```bash
+git clone https://github.com/UniMus-Natur/specli.git
+cd specli
+pip install -e .
+```
+
+Upgrade later with `pipx upgrade specli` or `pip install -U "specli @ git+…"`.
+
+## Quick start (any instance)
+
+```bash
+mkdir my-specify-config && cd my-specify-config
+git init
+
+specli workspace init .     # prompts for URL, user, login collection
+specli auth login           # stores password in .specli.local.yaml
+specli pull                 # snapshot the instance into this repo
+
+git add .
+git commit -m "Initial Specify config snapshot"
+```
+
+Work from inside that directory (or set `SPECLI_WORKSPACE` to its path):
+
+```bash
+specli auth whoami --check
+specli status
+specli push --dry-run
+specli push                 # needs /api/gitops/deploy/ on the server
+```
+
+## What lives in the config repo
 
 ```text
-backstop/                                  # stock disk baseline (from instance)
-  forms/<viewset>.views.xml
-  app/UIFormatters.xml
-base/                                      # Common (disk + DB)
-  forms/…
-  app/…
-by/
-  discipline/<slug>/
-    forms/…  schema/…  app/…
-  collection/<slug>/
-  usertype/<discipline>/<usertype>/
-  user/<username>/                         # Personal; --include-personal
+workspace.yaml                 # committed: instance URL, user, loginCollection
+.specli.local.yaml             # gitignored: password only
+.gitignore
+inventory.yaml
+
+forms/…  viewsets/…  schema/…  resources/…  records/…  state/
 ```
 
 | Concept | Meaning |
 |---------|---------|
-| **Context** | Specify instance (URL + user + secret) |
-| **Workspace** | Directory bound on the context |
-| **Scope** | One hierarchy level (`backstop`, `common`, `discipline/botany`, …) |
+| **Config repo** | Git repository for one Specify instance’s desired state |
+| **`workspace.yaml`** | Non-secret connection + policies (safe to commit) |
+| **`.specli.local.yaml`** | Password for this checkout only (never commit) |
+| **vendor** | Exact disk defaults from Specify (read-only) |
+| **managed** | Exact DB-backed resources you own |
 
-Default pull covers Backstop + Common + Discipline + Collection + UserType.
-Personal needs `--include-personal`.
+Forms are edited as self-contained **families** (view + its viewdefs together).
+Manifests under `viewsets/` define deployment boundaries. See
+[GITOPS_V3.md](docs/GITOPS_V3.md).
 
 ## Commands
 
 ```bash
+specli workspace init|get|status
 specli auth login|logout|whoami
-specli config get-contexts|use-context|set-context|…
 
-specli workspace init ./path
-specli workspace set ./path
-specli workspace get|status
-
-specli pull [--clean] [--include-personal] [--scope …]
+specli pull [--include-personal]
+specli status [--include-personal]
 specli push [--dry-run] [--include-personal]
-specli status
-
-specli form pull|push|status
-specli schema pull|push|status
-specli app pull|push|status
+specli gitops validate
 ```
 
-Passwords: OS keyring (fallback `~/.specli/credentials.yaml`).
+`status` exit codes: `0` clean · `2` local changes · `3` conflict / remote drift
 
-CI: `SPECLI_URL` + `SPECLI_USER` + `SPECLI_PASSWORD` (+ optional
-`SPECLI_LOGIN_COLLECTION`, `SPECLI_WORKSPACE`).
+## CI / automation
+
+Prefer env vars over a secrets file:
+
+```bash
+export SPECLI_URL=https://specify.example.org
+export SPECLI_USER=deploy
+export SPECLI_PASSWORD=…
+export SPECLI_LOGIN_COLLECTION=MyCollection   # optional API door
+export SPECLI_WORKSPACE=/path/to/config-repo
+specli status
+specli push
+```
+
+## Server requirement for push
+
+`pull` / `status` work against stock Specify 7 HTTP APIs.
+
+**Production `push`** requires the transactional endpoint
+`POST /api/gitops/deploy/` (compare-and-swap, one DB transaction). Without it,
+specli will not fall back to unsafe sequential REST writes. Ship that endpoint
+with your Specify deployment (see this project’s Specify patch / docs).
 
 ## License
 
-GPL-3.0-or-later (see [LICENSE](LICENSE)).
+GPL-3.0-or-later.

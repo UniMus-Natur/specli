@@ -1,14 +1,21 @@
-"""Interactive auth: ``specli auth login|logout|whoami``."""
+"""Interactive auth against the repository discovered from cwd."""
 
 from __future__ import annotations
 
 import argparse
 import getpass
 import sys
+from pathlib import Path
 
-from specli import configstore, secrets
+from specli import secrets
 from specli.client import disable_insecure_request_warnings, login
 from specli.connection import resolve_connection
+from specli.workspace import (
+    LOCAL_SECRETS_FILE,
+    load_workspace_meta,
+    require_workspace,
+    write_workspace_connection,
+)
 
 
 def _prompt(label: str, *, default: str | None = None, required: bool = True) -> str:
@@ -47,8 +54,7 @@ def _pick_login_collection(collections: dict[str, int], preferred: str | None) -
         return names[0]
     print(
         "Specify requires a collection at login. This is only a default door into the\n"
-        "instance — specli manages the whole server. Use --discipline on sync commands\n"
-        "to target a specific discipline."
+        "instance — specli manages the whole server."
     )
     print("Available collections:")
     for i, name in enumerate(names, 1):
@@ -70,19 +76,18 @@ def _pick_login_collection(collections: dict[str, int], preferred: str | None) -
 
 def cmd_login(args: argparse.Namespace) -> int:
     disable_insecure_request_warnings()
-    config = configstore.load_config()
-    context_name = (args.context or "").strip() or config.current_context or "default"
-    existing = config.contexts.get(context_name)
+    workspace = require_workspace()
+    meta = load_workspace_meta(workspace)
 
-    print(f"Logging in to create/update context {context_name!r} (Specify instance)")
+    print(f"Logging in for repository {workspace}")
     url = (args.url or "").strip() or _prompt(
         "Specify URL",
-        default=existing.url if existing else None,
+        default=str(meta.get("instance") or "").strip() or None,
     )
     url = url.rstrip("/")
     user = (args.user or "").strip() or _prompt(
         "Username",
-        default=existing.user if existing else None,
+        default=str(meta.get("user") or "").strip() or None,
     )
     password = (args.password or "").strip() or _prompt_password()
 
@@ -96,7 +101,10 @@ def cmd_login(args: argparse.Namespace) -> int:
         print(f"Could not reach {url}: {exc}", file=sys.stderr)
         return 1
     if res.status_code != 200:
-        print(f"GET /context/login/ failed ({res.status_code}): {res.text[:400]}", file=sys.stderr)
+        print(
+            f"GET /context/login/ failed ({res.status_code}): {res.text[:400]}",
+            file=sys.stderr,
+        )
         return 1
     collections = res.json().get("collections") or {}
     if not collections:
@@ -104,7 +112,7 @@ def cmd_login(args: argparse.Namespace) -> int:
         return 1
 
     preferred = (args.login_collection or "").strip() or (
-        existing.login_collection if existing else None
+        str(meta.get("loginCollection") or "").strip() or None
     )
     if args.login_collection:
         login_collection = args.login_collection.strip()
@@ -121,53 +129,32 @@ def cmd_login(args: argparse.Namespace) -> int:
             return 1 if not isinstance(code, int) else code
         raise
 
-    config.contexts[context_name] = configstore.Context(
-        name=context_name,
-        url=url,
+    write_workspace_connection(
+        workspace,
+        instance=url,
         user=user,
         login_collection=login_collection,
-        workspace=existing.workspace if existing else None,
     )
-    config.current_context = context_name
-    path = configstore.save_config(config)
-    backend = secrets.set_password(context_name, password)
-    print(f"Context {context_name!r} saved to {path}")
-    print(f"Password stored via {backend}")
+    secret_path = secrets.set_password(workspace, password)
+    print(f"Connection saved in {workspace / 'workspace.yaml'}")
+    print(f"Password stored in {secret_path} (gitignored)")
     print(f"login-collection: {login_collection} (default API door, not sync scope)")
-    print(f"Current context is now {context_name!r}")
-    if existing and existing.workspace:
-        print(f"workspace: {existing.workspace}")
-    else:
-        print("Next: specli workspace init ./specify-config")
-        print("Then:  specli pull --clean")
+    print("Next: specli pull")
     return 0
 
 
-def cmd_logout(args: argparse.Namespace) -> int:
-    name = (args.context or "").strip() or configstore.resolve_context_name()
-    if not name:
-        print("No context selected.", file=sys.stderr)
-        return 1
-    secrets.delete_password(name)
-    if args.forget:
-        config = configstore.load_config()
-        if name in config.contexts:
-            del config.contexts[name]
-            if config.current_context == name:
-                config.current_context = next(iter(sorted(config.contexts)), None)
-            configstore.save_config(config)
-            print(f"Removed context {name!r} and its password")
-        else:
-            print(f"Cleared password for unknown context {name!r}")
-    else:
-        print(f"Cleared password for context {name!r} (context entry kept)")
+def cmd_logout(_args: argparse.Namespace) -> int:
+    workspace = require_workspace()
+    secrets.delete_password(workspace)
+    print(f"Cleared password from {workspace / LOCAL_SECRETS_FILE}")
     return 0
 
 
 def cmd_whoami(args: argparse.Namespace) -> int:
     disable_insecure_request_warnings()
+    workspace = require_workspace()
     try:
-        conn = resolve_connection(context_name=args.context)
+        conn = resolve_connection()
     except SystemExit as exc:
         code = exc.code
         if code in (0, None):
@@ -176,15 +163,11 @@ def cmd_whoami(args: argparse.Namespace) -> int:
             print(code, file=sys.stderr)
             return 1
         return int(code)
-    label = conn.context_name or "(env)"
-    print(f"context: {label}")
+    print(f"workspace: {workspace}")
     print(f"url: {conn.url}")
     print(f"user: {conn.user}")
     print(f"login-collection: {conn.login_collection or '(auto)'}")
-    from specli.workspace import resolve_workspace
-
-    workspace = resolve_workspace()
-    print(f"workspace: {workspace or '(not set)'}")
+    print(f"secrets: {workspace / LOCAL_SECRETS_FILE}")
     if args.check:
         try:
             session, selected, _col_id, disc = conn.session(log_prefix="whoami")
@@ -208,8 +191,7 @@ def build_parser(sub: argparse._SubParsersAction) -> None:
     auth = sub.add_parser("auth", help="Log in, store secrets, inspect identity")
     cmd = auth.add_subparsers(dest="auth_cmd", required=True)
 
-    login_p = cmd.add_parser("login", help="Interactive login; create/update a context")
-    login_p.add_argument("--context", default=None, help="Context name (default: current or 'default')")
+    login_p = cmd.add_parser("login", help="Interactive login into this repository")
     login_p.add_argument("--url", default=None, help="Specify base URL")
     login_p.add_argument("--user", default=None, help="Username")
     login_p.add_argument("--password", default=None, help="Password (prefer prompt)")
@@ -220,17 +202,10 @@ def build_parser(sub: argparse._SubParsersAction) -> None:
     )
     login_p.set_defaults(auth_handler=cmd_login)
 
-    logout_p = cmd.add_parser("logout", help="Remove stored password for a context")
-    logout_p.add_argument("--context", default=None, help="Context name (default: current)")
-    logout_p.add_argument(
-        "--forget",
-        action="store_true",
-        help="Also delete the context from the config file",
-    )
+    logout_p = cmd.add_parser("logout", help="Remove the local password file entry")
     logout_p.set_defaults(auth_handler=cmd_logout)
 
-    whoami = cmd.add_parser("whoami", help="Show the active context / connection")
-    whoami.add_argument("--context", default=None, help="Context name override")
+    whoami = cmd.add_parser("whoami", help="Show the repository connection")
     whoami.add_argument(
         "--check",
         action="store_true",
