@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 from collections import defaultdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import quote
 from xml.etree import ElementTree as ET
 
@@ -17,7 +18,6 @@ from specli.client import (
 from specli.connection import Connection
 from specli.dir_ops import iter_dirs_as_scopes
 from specli.disk_config import (
-    fetch_static_config,
     list_disk_viewset_paths,
     try_fetch_static_config,
 )
@@ -93,6 +93,48 @@ def _vendor_scope(config_dir: str) -> ScopeSelector:
             user_type=parts[1],
         )
     _exit(f"unsupported config directory scope: {config_dir!r}")
+
+
+def _exclude_dangling_vendor_registry_entry(
+    inventory: Inventory,
+    *,
+    kind: Literal["AppResource", "Viewset"],
+    name: str,
+    config_dir: str,
+    filename: str,
+    scope: ScopeSelector,
+) -> None:
+    """Record a registry-listed disk file that the server 404s as excluded."""
+    relpath = f"{config_dir}/{filename}"
+    url = f"/static/config/{relpath}"
+    reason = f"dangling disk registry reference (HTTP 404): {url}"
+    print(
+        f"[pull] warning: excluding vendor {kind} {name!r} — {reason}",
+        file=sys.stderr,
+    )
+    material = json.dumps(
+        {
+            "kind": kind.casefold(),
+            "source": "vendor",
+            "scope": scope.as_dict(),
+            "name": name,
+            "filename": filename,
+            "reason": "dangling-registry-404",
+        },
+        sort_keys=True,
+    )
+    prefix = "resource-excluded" if kind == "AppResource" else "viewset-excluded"
+    inventory.add(
+        InventoryEntry(
+            uid=f"{prefix}:{hashlib.sha256(material.encode()).hexdigest()[:16]}",
+            kind=kind,
+            source="vendor",
+            status="excluded",
+            path=None,
+            scope=scope,
+            reason=reason,
+        )
+    )
 
 
 def _one_data_row(
@@ -171,13 +213,26 @@ def _pull_vendor_viewsets(
             if filename in seen_files:
                 _exit(f"{config_dir}: duplicate viewset registry file {filename!r}")
             seen_files.add(filename)
-            payload = fetch_static_config(session, base, f"{config_dir}/{filename}")
+            scope = _vendor_scope(config_dir)
+            payload = try_fetch_static_config(
+                session, base, f"{config_dir}/{filename}"
+            )
+            if payload is None:
+                _exclude_dangling_vendor_registry_entry(
+                    inventory,
+                    kind="Viewset",
+                    name=name,
+                    config_dir=config_dir,
+                    filename=filename,
+                    scope=scope,
+                )
+                continue
             split = split_viewset(payload, where=f"disk:{config_dir}/{filename}")
             manifest, entry = write_viewset(
                 root,
                 xml=payload,
                 source="vendor",
-                scope=_vendor_scope(config_dir),
+                scope=scope,
                 known_unresolved=split.unresolved_viewdefs,
             )
             # Registry order is runtime-significant for disk ties.
@@ -232,8 +287,6 @@ def _pull_managed_viewsets(
                     {"kind": "viewset", "scope": selector.as_dict(), "name": name},
                     sort_keys=True,
                 )
-                import hashlib
-
                 inventory.add(
                     InventoryEntry(
                         uid=f"viewset-excluded:{hashlib.sha256(material.encode()).hexdigest()[:16]}",
@@ -312,14 +365,27 @@ def _pull_vendor_resources(
             if name.casefold() in names:
                 _exit(f"{config_dir}: duplicate app resource name {name!r}")
             names.add(name.casefold())
-            payload = fetch_static_config(session, base, f"{config_dir}/{filename}")
+            scope = _vendor_scope(config_dir)
+            payload = try_fetch_static_config(
+                session, base, f"{config_dir}/{filename}"
+            )
+            if payload is None:
+                _exclude_dangling_vendor_registry_entry(
+                    inventory,
+                    kind="AppResource",
+                    name=name,
+                    config_dir=config_dir,
+                    filename=filename,
+                    scope=scope,
+                )
+                continue
             manifest, entry = write_resource(
                 root,
                 name=name,
                 payload=payload,
                 mimetype=mimetype,
                 source="vendor",
-                scope=_vendor_scope(config_dir),
+                scope=scope,
                 metadata={"filename": filename, "registryOrder": order},
             )
             inventory.add(entry)
@@ -338,13 +404,9 @@ def _resource_hash(payload: str, mimetype: str, *, where: str) -> str:
             raw = json.dumps(
                 data, sort_keys=True, separators=(",", ":"), ensure_ascii=False
             )
-            import hashlib
-
             return f"sha256:{hashlib.sha256(raw.encode()).hexdigest()}"
     except json.JSONDecodeError:
         _exit("resource declares JSON mimetype but contains invalid JSON")
-    import hashlib
-
     # App-resource XML is opaque application data. Jasper reports, for example,
     # legitimately contain DTDs and must not be parsed by the form compiler.
     return f"sha256:{hashlib.sha256(payload.encode()).hexdigest()}"
@@ -380,8 +442,6 @@ def _pull_managed_resources(
                 _exit(f"{scope.label()}: duplicate app resource name {name!r}")
             names.add(name.casefold())
             if scope.level == "personal" and not include_personal:
-                import hashlib
-
                 material = json.dumps(
                     {"kind": "resource", "scope": selector.as_dict(), "name": name},
                     sort_keys=True,

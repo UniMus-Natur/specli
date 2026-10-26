@@ -178,6 +178,12 @@ shows effective-provider changes and changes that are fully shadowed.
 Pull refuses to overwrite uncommitted local edits. Resolve or commit those
 first, then pull again.
 
+When a disk registry (`app_resources.xml` / `viewset_registry.xml`) lists a
+file that the server returns as HTTP 404, pull warns on stderr and records an
+`excluded` inventory entry with reason
+`dangling disk registry reference (HTTP 404): …` instead of aborting. Other
+HTTP failures for registry-listed files remain fatal.
+
 ## Status
 
 Status compares:
