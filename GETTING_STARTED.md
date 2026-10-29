@@ -101,7 +101,7 @@ specli pull                 # refresh from the instance
 specli gitops validate
 specli status               # three-way: baseline / local / remote
 specli push --dry-run
-specli push                 # requires /api/gitops/deploy/ on the server
+specli push                 # stock Specify HTTP APIs
 ```
 
 ### Status exit codes
@@ -133,5 +133,6 @@ Deleting a file alone is **not** a delete. To retire a managed resource:
 |---------|-----|
 | `No specli/v3 repository found` | `cd` into the config repo, or set `SPECLI_WORKSPACE` |
 | `No credentials in .specli.local.yaml` | `specli auth login` |
-| Push fails / 404 on deploy | Server needs `POST /api/gitops/deploy/` — pull/status still work without it |
+| Push rejected (conflict / remote-drift) | `specli pull` or resolve local vs remote, then push again |
+| Push fails mid-way | Ops are sequential; inspect remote, fix forward or restore from git |
 | Pull refuses local edits | Commit or revert local changes first; pull never discards work |

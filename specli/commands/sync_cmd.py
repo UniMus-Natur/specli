@@ -1,4 +1,4 @@
-"""Top-level specli/v3 pull, status, and transactional push."""
+"""Top-level specli/v3 pull, status, and push."""
 
 from __future__ import annotations
 
@@ -24,9 +24,9 @@ def cmd_pull(args: argparse.Namespace) -> int:
 
 def cmd_push(args: argparse.Namespace) -> int:
     disable_insecure_request_warnings()
-    from specli.transactional_push import cmd_push as transactional_push
+    from specli.push import cmd_push as push_cmd
 
-    return transactional_push(args)
+    return push_cmd(args)
 
 
 def build_parser(sub: argparse._SubParsersAction) -> None:

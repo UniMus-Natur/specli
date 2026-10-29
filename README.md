@@ -9,8 +9,7 @@ resources, and picklists in its own Git repo.
 - Instance URL (and optional login collection) live in the config repo (`workspace.yaml`)
 - Username + password stay local and gitignored (`.specli.local.yaml`)
 - No `~/.specli` / machine-global config
-- Pull is staged and validated; push is all-or-nothing CAS (requires a small
-  Specify server endpoint)
+- Pull / status / push all use Specify’s stock HTTP APIs (no server patch)
 
 Full contract: [docs/GITOPS_V3.md](docs/GITOPS_V3.md)  
 Walkthrough: [GETTING_STARTED.md](GETTING_STARTED.md)
@@ -65,7 +64,7 @@ Work from inside that directory (or set `SPECLI_WORKSPACE` to its path):
 specli auth whoami --check
 specli status
 specli push --dry-run
-specli push                 # needs /api/gitops/deploy/ on the server
+specli push                 # writes via Specify REST / context APIs
 ```
 
 ## What lives in the config repo
@@ -119,14 +118,14 @@ specli status
 specli push
 ```
 
-## Server requirement for push
+## Push notes
 
-`pull` / `status` work against stock Specify 7 HTTP APIs.
-
-**Production `push`** requires the transactional endpoint
-`POST /api/gitops/deploy/` (compare-and-swap, one DB transaction). Without it,
-specli will not fall back to unsafe sequential REST writes. Ship that endpoint
-with your Specify deployment (see this project’s Specify patch / docs).
+`push` applies create / update / delete through Specify’s public REST and
+context endpoints (`SpAppResource`, `SpViewSetObj`, picklists, schema import).
+It refuses conflict / remote-drift from `status` first, and checks resource
+`version` before each update. Operations are sequential (not one DB
+transaction): if a later op fails, earlier ones may already have landed — fix
+forward or restore from git and push again.
 
 ## License
 

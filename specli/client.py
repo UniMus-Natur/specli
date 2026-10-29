@@ -118,8 +118,33 @@ def post_json(
     return res.json()
 
 
+def delete_json(session: requests.Session, base: str, path: str) -> None:
+    url = f"{base}{path}" if path.startswith("/") else path
+    res = session.delete(
+        url,
+        headers={
+            "X-CSRFToken": session.cookies.get("csrftoken", ""),
+            "Referer": base,
+        },
+        timeout=120,
+    )
+    if not res.ok:
+        sys.exit(f"DELETE {path} failed ({res.status_code}): {res.text[:800]}")
+
+
 def strip_meta_for_put(obj: dict[str, Any]) -> dict[str, Any]:
-    skip = frozenset({"resource_uri", "recordset_info", "_tableName"})
+    skip = frozenset(
+        {
+            "resource_uri",
+            "recordset_info",
+            "_tableName",
+            "timestampcreated",
+            "timestampmodified",
+            "spappresourcedatas",
+            "spreports",
+            "picklistitems",
+        }
+    )
     return {k: v for k, v in obj.items() if k not in skip}
 
 

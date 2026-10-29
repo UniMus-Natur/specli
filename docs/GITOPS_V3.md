@@ -204,19 +204,18 @@ Exit codes:
 
 ## Push
 
-All payloads are compiled and validated before the first write. Production push
-uses one transactional compare-and-swap deployment request containing:
+All payloads are compiled and validated before the first write. Push builds a
+plan from three-way status, then applies each operation through stock Specify
+HTTP APIs:
 
-- an idempotency key derived from the Git commit and plan hash;
-- expected object IDs, versions, and canonical hashes;
-- complete desired payloads;
-- explicit deletion and fallback assertions;
-- expected instance and resolver contract.
+- app resources → `SpAppResource` + `SpAppResourceData`
+- viewsets → `SpViewSetObj` + `SpAppResourceData`
+- picklists → `PickList` + `PickListItem`
+- schema localization → `POST /context/schema_localization_import.json`
 
-The server locks affected rows, validates all preconditions, applies all
-operations in one transaction, records an audit event, and returns new state
-tokens. Generic sequential REST writes are best-effort and are not considered
-production-safe.
+Before writing, push refuses `conflict` / `remote-drift` and checks object
+`version` (and related data/item versions) against the observed remote
+baseline. Writes are sequential, not a single database transaction.
 
 ## Deletion
 
