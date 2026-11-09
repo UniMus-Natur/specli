@@ -6,7 +6,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from specli.push import apply_push_plan, build_push_plan
+from specli.form_family import canonical_sha256
+from specli.push import _payload_lock_sha256, apply_push_plan, build_push_plan
 from specli.repository_v3 import (
     ContextState,
     Inventory,
@@ -19,6 +20,35 @@ from specli.repository_v3 import (
 
 def payload_hash(payload: str) -> str:
     return f"sha256:{hashlib.sha256(payload.encode()).hexdigest()}"
+
+
+class PayloadLockSha256Tests(unittest.TestCase):
+    def test_viewset_uses_canonical_sha_not_raw(self) -> None:
+        # Same document, different indentation — raw digests differ, C14N must not.
+        compact = '<?xml version="1.0"?><viewset name="x"><views/><viewdefs/></viewset>'
+        pretty = (
+            '<?xml version="1.0"?>\n'
+            '<viewset name="x">\n'
+            "  <views/>\n"
+            "  <viewdefs/>\n"
+            "</viewset>\n"
+        )
+        self.assertNotEqual(payload_hash(compact), payload_hash(pretty))
+        self.assertEqual(
+            _payload_lock_sha256("Viewset", compact),
+            _payload_lock_sha256("Viewset", pretty),
+        )
+        self.assertEqual(
+            _payload_lock_sha256("Viewset", pretty),
+            canonical_sha256(pretty),
+        )
+
+    def test_app_resource_keeps_raw_utf8_digest(self) -> None:
+        payload = "<new/>"
+        self.assertEqual(
+            _payload_lock_sha256("AppResource", payload),
+            payload_hash(payload),
+        )
 
 
 class PushPlanTests(unittest.TestCase):

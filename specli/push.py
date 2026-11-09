@@ -22,6 +22,7 @@ from specli.client import (
 )
 from specli.connection import Connection, resolve_connection
 from specli.remote_v3 import pull_remote_repository
+from specli.form_family import canonical_sha256
 from specli.repository_v3 import (
     ContextState,
     Inventory,
@@ -61,6 +62,18 @@ def _yaml(path: Path) -> dict[str, Any]:
 
 def _sha256_text(payload: str) -> str:
     return f"sha256:{hashlib.sha256(payload.encode()).hexdigest()}"
+
+
+def _payload_lock_sha256(kind: str, payload: str) -> str:
+    """Hash written into local.lock after push — must match status/pull.
+
+    Viewsets are compared via ``canonical_sha256`` (C14N) everywhere except this
+    path previously used a raw UTF-8 digest, so every successful viewset push
+    left baseline ≠ remote and the next edit looked like a three-way conflict.
+    """
+    if kind == "Viewset":
+        return canonical_sha256(payload)
+    return _sha256_text(payload)
 
 
 def _sha256_json(value: Any) -> str:
@@ -345,7 +358,7 @@ def _apply_app_or_viewset(
             "objectVersion": int(created.get("version") or 0),
             "dataVersion": int(data.get("version") or 0),
             "directoryId": directory_id,
-            "sha256": _sha256_text(str(desired["payload"])),
+            "sha256": _payload_lock_sha256(op["kind"], str(desired["payload"])),
         }
 
     # update
@@ -387,7 +400,7 @@ def _apply_app_or_viewset(
         "objectVersion": int(updated.get("version") or 0),
         "dataVersion": int(data_updated.get("version") or 0),
         "directoryId": expected.get("directoryId") or desired.get("directoryId"),
-        "sha256": _sha256_text(str(desired["payload"])),
+        "sha256": _payload_lock_sha256(op["kind"], str(desired["payload"])),
     }
 
 
